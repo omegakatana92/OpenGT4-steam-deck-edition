@@ -32,19 +32,14 @@ jobs:
           bash -n tools/package_appimage.sh
       - name: Collect exact corresponding sources and notices
         run: |
-          # Enable the source equivalents of this runner's Ubuntu binary repositories.
-          sudo python3 - <<'PY'
-          from pathlib import Path
-          for path in list(Path('/etc/apt').glob('sources.list')) + list(Path('/etc/apt/sources.list.d').glob('*.list')):
-              lines = path.read_text().splitlines()
-              additions = [line.replace('deb ', 'deb-src ', 1) for line in lines if line.startswith('deb ') and ('ubuntu.com/ubuntu' in line or 'azure.archive.ubuntu.com' in line)]
-              if additions:
-                  path.write_text('\n'.join(lines + additions) + '\n')
-          for path in Path('/etc/apt/sources.list.d').glob('*.sources'):
-              text = path.read_text()
-              if 'ubuntu' in text:
-                  path.write_text(text.replace('Types: deb\n', 'Types: deb deb-src\n'))
-          PY
+          # Hosted runners can use mirror+file URIs; add explicit Ubuntu source
+          # entries rather than relying on their binary source-list formatting.
+          sudo tee /etc/apt/sources.list.d/opengt4-sources.list > /dev/null <<'SOURCES'
+          deb-src http://azure.archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
+          deb-src http://azure.archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
+          deb-src http://azure.archive.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
+          deb-src http://azure.archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse
+          SOURCES
           sudo apt-get update
           python3 tools/release/collect_linux_sources.py build-linux /usr/bin/ffmpeg release-materials
           git archive --format=tar.gz --prefix=OpenGT4/ HEAD > release-materials/opengt4-source.tar.gz
