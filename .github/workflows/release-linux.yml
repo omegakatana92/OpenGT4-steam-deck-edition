@@ -1,0 +1,94 @@
+name: Publish experimental Linux release
+on:
+  push:
+    branches: [release/v0.1.0-experimental]
+permissions:
+  contents: write
+concurrency:
+  group: release-v0.1.0-experimental
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      TAG: v0.1.0-experimental
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build and media dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config libgl1-mesa-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+            libxfixes-dev libasound2-dev libpulse-dev libudev-dev ffmpeg dpkg-dev
+      - name: Configure and build
+        run: |
+          cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-linux --target opengt4 launcher_tests media_tests sound_tests movie_posix_tests --parallel 2
+      - name: Validate without game data
+        run: |
+          ctest --test-dir build-linux --output-on-failure -R '^(launcher_config|launcher_config_negative|native_media|native_sound|menu_music_prefix_negative|movie_posix|appimage_launcher)$'
+          sh -n packaging/linux/AppRun
+          bash -n tools/package_appimage.sh
+      - name: Collect exact corresponding sources and notices
+        run: |
+          # Enable the source equivalents of this runner's Ubuntu binary repositories.
+          sudo python3 - <<'PY'
+          from pathlib import Path
+          for path in list(Path('/etc/apt').glob('sources.list')) + list(Path('/etc/apt/sources.list.d').glob('*.list')):
+              lines = path.read_text().splitlines()
+              additions = [line.replace('deb ', 'deb-src ', 1) for line in lines if line.startswith('deb ') and ('ubuntu.com/ubuntu' in line or 'azure.archive.ubuntu.com' in line)]
+              if additions:
+                  path.write_text('\n'.join(lines + additions) + '\n')
+          for path in Path('/etc/apt/sources.list.d').glob('*.sources'):
+              text = path.read_text()
+              if 'ubuntu' in text:
+                  path.write_text(text.replace('Types: deb\n', 'Types: deb deb-src\n'))
+          PY
+          sudo apt-get update
+          python3 tools/release/collect_linux_sources.py build-linux /usr/bin/ffmpeg release-materials
+          git archive --format=tar.gz --prefix=OpenGT4/ HEAD > release-materials/opengt4-source.tar.gz
+          tar -czf OpenGT4-${TAG}-corresponding-source.tar.gz -C release-materials .
+      - name: Get verified AppImage packaging tool
+        run: |
+          curl -fL --retry 3 https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage -o /tmp/linuxdeploy-x86_64.AppImage
+          echo 'df908b19f1ed1cdafa79508d415aa12d6c56ce4d56d4149aa8c09286718706e5  /tmp/linuxdeploy-x86_64.AppImage' | sha256sum -c -
+          chmod +x /tmp/linuxdeploy-x86_64.AppImage
+      - name: Package AppImage and native Linux archive
+        env:
+          OPENGT4_RELEASE_NOTICES: ${{ github.workspace }}/release-materials/notices
+        run: |
+          tools/package_appimage.sh build-linux /tmp/linuxdeploy-x86_64.AppImage /usr/bin/ffmpeg
+          mv dist/OpenGT4-Steam-Deck-experimental-x86_64.AppImage "OpenGT4-Steam-Deck-${TAG}-x86_64.AppImage"
+          mkdir portable-extract
+          cd portable-extract
+          "../OpenGT4-Steam-Deck-${TAG}-x86_64.AppImage" --appimage-extract > /dev/null
+          mv squashfs-root "OpenGT4-Linux-${TAG}-x86_64"
+          tar -czf "../OpenGT4-Linux-${TAG}-x86_64.tar.gz" "OpenGT4-Linux-${TAG}-x86_64"
+          cd ..
+          LD_LIBRARY_PATH="${PWD}/portable-extract/OpenGT4-Linux-${TAG}-x86_64/usr/lib" \
+            "portable-extract/OpenGT4-Linux-${TAG}-x86_64/usr/bin/ffmpeg" -v error -f lavfi -i testsrc2=size=640x448:rate=30 -t 0.2 -f null -
+          python3 - <<'PY'
+          from pathlib import Path
+          forbidden={'.iso','.bin','.elf','.irx','.gt4','.vol','.chd','.rom'}
+          root=next(Path('portable-extract').iterdir())
+          bad=[str(p) for p in root.rglob('*') if p.is_file() and (p.suffix.lower() in forbidden or not p.stat().st_mode & 4)]
+          if bad: raise SystemExit(f'Unexpected game data or unreadable files: {bad}')
+          PY
+          sha256sum "OpenGT4-Steam-Deck-${TAG}-x86_64.AppImage" "OpenGT4-Linux-${TAG}-x86_64.tar.gz" "OpenGT4-${TAG}-corresponding-source.tar.gz" > SHA256SUMS
+      - name: Publish prerelease with all assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A draft keeps partial asset uploads out of the public release view.
+          gh release create "$TAG" --draft --prerelease --target "$GITHUB_SHA" \
+            --title "OpenGT4 Steam Deck Edition ${TAG}" --notes-file tools/release/NOTES.md \
+            "OpenGT4-Steam-Deck-${TAG}-x86_64.AppImage" "OpenGT4-Linux-${TAG}-x86_64.tar.gz" \
+            "OpenGT4-${TAG}-corresponding-source.tar.gz" SHA256SUMS
+          gh release edit "$TAG" --draft=false
+      - name: Preserve test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-test-log
+          path: build-linux/Testing/Temporary/LastTest.log

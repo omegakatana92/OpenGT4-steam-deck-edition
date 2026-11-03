@@ -37,6 +37,17 @@ provide corresponding source for all bundled GPL/LGPL components, including the
 exact FFmpeg package and its dynamic dependencies. This script creates a local
 test artifact; it does not publish or certify a distribution-ready release.
 EOF
+if [[ -n ${OPENGT4_RELEASE_NOTICES:-} ]]; then
+    [[ -d $OPENGT4_RELEASE_NOTICES ]] || { echo 'Missing release notices directory.' >&2; exit 2; }
+    cp -R "$OPENGT4_RELEASE_NOTICES" "$appdir/usr/share/doc/opengt4/runtime-notices"
+    cat >> "$appdir/usr/share/doc/opengt4/THIRD_PARTY.txt" <<'EOF'
+For the v0.1.0-experimental published release, matching runtime copyright notices
+and package/source versions are in runtime-notices. The corresponding-source
+archive attached to that release contains the exact project and static dependency
+sources, plus Ubuntu source packages (original sources, patches and build rules)
+for the bundled runtime packages. See README-SOURCE.txt inside that archive.
+EOF
+fi
 cd "$root/dist"
 export ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1
 export OUTPUT=OpenGT4-Steam-Deck-experimental-x86_64.AppImage
