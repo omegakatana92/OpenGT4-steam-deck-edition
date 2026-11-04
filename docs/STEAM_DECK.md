@@ -52,7 +52,10 @@ SDL_CreateWindow failed: SDL not configured with OpenGL/GLX support
 ```
 
 A clean configure of the same source produces `SDL_VIDEO_OPENGL_GLX=1` and a
-working OpenGL 4.1 core context on Mesa.
+working OpenGL 4.1 core context on Mesa. With the change below the experiment is
+also harmless: forcing `HAVE_OPENGL_GLX=OFF` into an existing tree and
+re-running `cmake` re-probes the headers and keeps `SDL_VIDEO_OPENGL_GLX 1`, so
+the old cache state cannot survive a re-configure.
 
 > The published `v0.1.0-experimental` AppImage itself was built **with** GLX
 > (`glXCreateContextAttribsARB` is present and the stub string is not), so the
