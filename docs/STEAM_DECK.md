@@ -246,6 +246,26 @@ build until the replacement has been reviewed.
 Set `OPENGT4_SKIP_SMOKE=1` only on a machine with no display. Set
 `OPENGT4_APPIMAGE_NAME` to choose another output filename.
 
+### Downloading the test build from CI
+
+The Linux workflow builds and uploads the image as a workflow **artifact** on
+every push (see `on.push.branches` in `.github/workflows/linux.yml`), including
+`fix/steam-deck-glx`. This is not a release and needs no release to be
+published:
+
+```sh
+gh run list --branch fix/steam-deck-glx --workflow linux.yml
+gh run download <run-id> -n OpenGT4-Steam-Deck-x86_64-AppImage -D opengt4-app
+cd opengt4-app && chmod +x *.AppImage
+./OpenGT4-Steam-Deck-*.AppImage --video-check
+```
+
+You can also open the run in the repository's **Actions** tab and download
+`OpenGT4-Steam-Deck-x86_64-AppImage`. GitHub requires a sign-in for artifact
+downloads, and artifacts expire after 14 days. The job runs the same
+`--video-check` from inside the finished image before uploading it, so a
+downloaded artifact has already created an X11/GLX window on the build host.
+
 ## First run on Steam Deck
 
 1. Copy the AppImage and your own ISO to the Deck. Keep the ISO in a stable

@@ -15,9 +15,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build pkg-config libgl1-mesa-dev \
-            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
-            libxfixes-dev libasound2-dev libpulse-dev libudev-dev \
-            ffmpeg xvfb mesa-utils
+            libgl1-mesa-dri libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
+            libxi-dev libxfixes-dev libasound2-dev libpulse-dev libudev-dev \
+            ffmpeg xvfb mesa-utils nasm
       - name: Clean configure and build
         # tools/build_linux.sh deletes build-linux first: SDL2 caches its
         # X11/GLX probes, so a reused tree can silently keep GLX disabled.
@@ -46,6 +46,32 @@ jobs:
           bash -n tools/package_appimage.sh
           bash -n tools/build_ffmpeg_minimal.sh
           bash -n tools/build_linux.sh
+      - name: Build the minimal FFmpeg for the image
+        # The distribution ffmpeg links libavdevice -> libSDL2/X11, which would
+        # drag a system graphics stack into the AppImage.
+        run: JOBS=2 tools/build_ffmpeg_minimal.sh build-ffmpeg
+      - name: Fetch linuxdeploy
+        run: |
+          curl -fL -o /tmp/linuxdeploy-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          printf '%s\n' 'df908b19f1ed1cdafa79508d415aa12d6c56ce4d56d4149aa8c09286718706e5  /tmp/linuxdeploy-x86_64.AppImage' | sha256sum -c -
+          chmod +x /tmp/linuxdeploy-x86_64.AppImage
+      - name: Build and self-test the AppImage
+        # xvfb-run gives the packaging script a display, so the finished image
+        # creates a real X11/GLX window before it is uploaded.
+        run: |
+          xvfb-run -a -s "-screen 0 1280x800x24" \
+            tools/package_appimage.sh build-linux /tmp/linuxdeploy-x86_64.AppImage build-ffmpeg/bin/ffmpeg
+          ls -l dist/
+      - name: Upload the AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenGT4-Steam-Deck-x86_64-AppImage
+          path: |
+            dist/*.AppImage
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14
       - name: Preserve test results
         if: always()
         uses: actions/upload-artifact@v4
