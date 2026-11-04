@@ -197,9 +197,78 @@ static int ensure_framebuffer(void)
     return 1;
 }
 
+/* ---- startup diagnostics ------------------------------------------------ */
+/* A GLX-less SDL2 fails deep inside CreateWindow with an error text that
+   names neither the driver nor the build configuration, so keep the failing
+   step and the SDL error together and report the environment around it. */
+static char video_error[512];
+
+const char *plat_video_error(void)
+{
+    return video_error[0] ? video_error : "unknown video error";
+}
+
+static void video_set_error(const char *stage, const char *detail)
+{
+    snprintf(video_error, sizeof video_error, "%s: %s", stage,
+             detail && *detail ? detail : "unknown error");
+}
+
+static const char *video_env(const char *name)
+{
+    const char *value = getenv(name);
+    return value && *value ? value : "(unset)";
+}
+
+void plat_video_report(void)
+{
+    const char *driver = SDL_GetCurrentVideoDriver();
+    int count = SDL_GetNumVideoDrivers();
+    fprintf(stderr, "video: SDL %d.%d.%d, %d video driver(s) compiled in:",
+            SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_PATCHLEVEL, count);
+    for (int i = 0; i < count; i++) fprintf(stderr, " %s", SDL_GetVideoDriver(i));
+    fputc('\n', stderr);
+    fprintf(stderr, "video: driver in use: %s\n", driver ? driver : "(none)");
+#ifdef SDL_VIDEO_OPENGL_GLX
+    fprintf(stderr, "video: OpenGL/GLX backend compiled in: yes\n");
+#else
+    fprintf(stderr, "video: OpenGL/GLX backend compiled in: NO - this binary cannot "
+                    "create an OpenGL context through X11\n");
+#endif
+    fprintf(stderr, "video: DISPLAY=%s WAYLAND_DISPLAY=%s SDL_VIDEODRIVER=%s\n",
+            video_env("DISPLAY"), video_env("WAYLAND_DISPLAY"), video_env("SDL_VIDEODRIVER"));
+    if (context) {
+        const GLubyte *version = glGetString(GL_VERSION);
+        const GLubyte *renderer = glGetString(GL_RENDERER);
+        const GLubyte *vendor = glGetString(GL_VENDOR);
+        const GLubyte *glsl = glGetString(GL_SHADING_LANGUAGE_VERSION);
+        fprintf(stderr, "video: OpenGL %s | %s | %s | GLSL %s\n",
+                version ? (const char *)version : "(unknown)",
+                renderer ? (const char *)renderer : "(unknown)",
+                vendor ? (const char *)vendor : "(unknown)",
+                glsl ? (const char *)glsl : "(unknown)");
+    }
+    if (video_error[0]) fprintf(stderr, "video: last failure: %s\n", video_error);
+    if (strstr(video_error, "not configured with OpenGL/GLX")) {
+        fprintf(stderr,
+            "video: this SDL2 was compiled without its GLX backend. Install the X11 and\n"
+            "video: OpenGL development packages, delete the whole build directory (SDL2\n"
+            "video: caches that probe) and rebuild; setting SDL_VIDEODRIVER or installing\n"
+            "video: drivers at run time cannot change a compiled-out backend.\n");
+    } else if (strstr(video_error, "x11 not available") || strstr(video_error, "No available video device")) {
+        fprintf(stderr,
+            "video: no usable display was found. On a Steam Deck start from Desktop Mode\n"
+            "video: or Gaming Mode, and check DISPLAY (native X11) or WAYLAND_DISPLAY.\n");
+    }
+}
+
 int plat_video_init(const plat_video_desc *d)
 {
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER) != 0) return -1;
+    video_error[0] = 0;
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER) != 0) {
+        video_set_error("SDL_Init(SDL_INIT_VIDEO)", SDL_GetError());
+        return -1;
+    }
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     /* P: optional placement for filming on the user's secondary monitor.
@@ -216,7 +285,10 @@ int plat_video_init(const plat_video_desc *d)
     window = SDL_CreateWindow(window_title, window_x, window_y, d->width, d->height,
                               SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI |
                               (d->fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0));
-    if (!window) return -1;
+    if (!window) {
+        video_set_error("SDL_CreateWindow(SDL_WINDOW_OPENGL)", SDL_GetError());
+        return -1;
+    }
     /* 4.3 for the FSR shaders; 3.3 is enough for everything else */
     static const int versions[2][2] = { { 4, 3 }, { 3, 3 } };
     for (int i = 0; i < 2 && !context; i++) {
@@ -224,7 +296,14 @@ int plat_video_init(const plat_video_desc *d)
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, versions[i][1]);
         context = SDL_GL_CreateContext(window);
     }
-    if (!context || !gl_load()) return -1;
+    if (!context) {
+        video_set_error("SDL_GL_CreateContext(4.3 core, then 3.3 core)", SDL_GetError());
+        return -1;
+    }
+    if (!gl_load()) {
+        video_set_error("loading the OpenGL 3.3 entry points", "a required GL function is missing");
+        return -1;
+    }
     if (gl_enable_reversed_z()) fprintf(stderr, "OpenGL: reversed float depth\n");
     profile_frames = getenv("OPENGT4_VIDEO_PROFILE") != NULL;
     capture_pipe=getenv("OPENGT4_CAPTURE_PIPE");
@@ -238,7 +317,10 @@ int plat_video_init(const plat_video_desc *d)
     SDL_GL_SetSwapInterval(vsync ? 1 : 0);
 
     program2d = gl_program(vs2d, fs2d);
-    if (!program2d) return -1;
+    if (!program2d) {
+        video_set_error("compiling the 2D shader program", "see the OpenGL shader log above");
+        return -1;
+    }
     u_view2d = glGetUniformLocation(program2d, "view");
     u_tex2d = glGetUniformLocation(program2d, "tex");
     u_kind2d=glGetUniformLocation(program2d,"kind");
@@ -261,7 +343,21 @@ int plat_video_init(const plat_video_desc *d)
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, white);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    return ensure_framebuffer() ? 0 : -1;
+    if (!ensure_framebuffer()) {
+        video_set_error("creating the OpenGL frame target", "framebuffer incomplete");
+        return -1;
+    }
+    {
+        const GLubyte *version = glGetString(GL_VERSION);
+        const GLubyte *renderer = glGetString(GL_RENDERER);
+        const GLubyte *glsl = glGetString(GL_SHADING_LANGUAGE_VERSION);
+        fprintf(stderr, "video: %s driver, OpenGL %s (%s), GLSL %s\n",
+                SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "(none)",
+                version ? (const char *)version : "(unknown)",
+                renderer ? (const char *)renderer : "(unknown)",
+                glsl ? (const char *)glsl : "(unknown)");
+    }
+    return 0;
 }
 
 void video_flush2d(void)

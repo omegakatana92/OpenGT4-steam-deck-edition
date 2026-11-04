@@ -2,6 +2,11 @@
 > unofficial Linux port, not the official OpenGT4 release. Linux build instructions,
 > AppImage packaging, first-run setup, and outstanding on-device checks are in
 > [docs/STEAM_DECK.md](docs/STEAM_DECK.md). Steam Deck gameplay is not yet validated.
+>
+> The Linux build must use a clean build directory (`tools/build_linux.sh` does
+> this): SDL2 caches its X11/GLX probes, and a stale cache produces a binary that
+> fails with `cannot open a window: SDL not configured with OpenGL/GLX support`.
+> Check any Linux build, without a disc, with `./build-linux/opengt4 --video-check`.
 
 <div align="center">
 

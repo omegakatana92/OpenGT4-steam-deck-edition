@@ -1237,7 +1237,8 @@ int main(int argc, char **argv)
     int preview_courses=0;
     int intro_override=-1,first_run_override=0;
     int persistent_video=1,settings_preview=0;
-    for(int i=1;i<argc;i++)if(!strcmp(argv[i],"--shot") || !strcmp(argv[i],"--no-config"))persistent_video=0;
+    int video_check=0;
+    for(int i=1;i<argc;i++)if(!strcmp(argv[i],"--shot") || !strcmp(argv[i],"--no-config") || !strcmp(argv[i],"--video-check"))persistent_video=0;
     const char *config_file=NULL;
     for(int i=1;i<argc;i++)if(!strcmp(argv[i],"--config-file") && i+1<argc){config_file=argv[++i];persistent_video=1;}
     video_settings settings;video_settings_init(&settings,persistent_video,config_file);
@@ -1275,6 +1276,7 @@ int main(int argc, char **argv)
         if(!strcmp(argv[i],"--config-file")){if(++i==argc || strlen(argv[i])>=sizeof settings.path)return 2;continue;}
         if(!strcmp(argv[i],"--no-config"))continue;
         if(!strcmp(argv[i],"--video-settings")){settings_preview=1;continue;}
+        if(!strcmp(argv[i],"--video-check")){video_check=1;continue;}
         if(!strcmp(argv[i],"--ui-filter") && i+1<argc){
             const char *mode=argv[++i];
             if(!strcmp(mode,"smooth"))settings.current.filter=0;
@@ -1356,6 +1358,25 @@ int main(int argc, char **argv)
         } else argv[positional++] = argv[i];
     }
     argc = positional;
+    /* Booting the game needs a disc image, which made "can this machine open
+       an OpenGL window?" impossible to check before a disc was at hand. This
+       path creates the real window and context and exits without touching one. */
+    if (video_check) {
+        plat_video_desc check = { window_w, window_h, window_full, video_vsync, upscale };
+        fprintf(stderr, "video check: creating a window and an OpenGL context\n");
+        if (plat_video_init(&check) != 0) {
+            fprintf(stderr, "video check: FAILED: %s\n", plat_video_error());
+            plat_video_report();
+            plat_video_shutdown();
+            return 1;
+        }
+        plat_video_begin_frame();
+        plat_video_end_frame();
+        plat_video_report();
+        plat_video_shutdown();
+        fprintf(stderr, "video check: OK\n");
+        return 0;
+    }
     if (argc < 2) {
         fprintf(stderr, "usage: %s <disc.iso|GT4.VOL> [project] [screen]\n", argv[0]);
         return 2;
@@ -1387,7 +1408,8 @@ int main(int argc, char **argv)
     plat_video_desc desc = { window_w, window_h, window_full, video_vsync, upscale };
     settings.current.video=desc;
     if (plat_video_init(&desc) != 0) {
-        fprintf(stderr, "cannot open a window: %s\n", SDL_GetError());
+        fprintf(stderr, "cannot open a window: %s\n", plat_video_error());
+        plat_video_report();
         return 1;
     }
     video_set_aspect(settings.current.aspect);race_hud_set_widescreen(settings.current.aspect);   /* D_006184F0 */
