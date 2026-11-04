@@ -78,6 +78,12 @@ the old cache state cannot survive a re-configure.
 | `tools/package_appimage.sh` | Audits dependencies, bundles no libraries at all, refuses to ship an image whose `usr/lib` is not empty, and runs the OpenGL self-test from inside the finished image. |
 | `.github/workflows/linux.yml` | Clean builds, prints the compiled backends, and creates an X11/GLX window under Xvfb on every push. |
 
+The option names above are the ones SDL 2.30.9 actually defines (checked in its
+`CMakeLists.txt` and `cmake/sdlchecks.cmake`): `SDL_X11`, `SDL_OPENGL`, and the
+`HAVE_OPENGL_GLX`/`HAVE_OPENGL` probe results that become
+`SDL_VIDEO_OPENGL_GLX`/`SDL_VIDEO_OPENGL` in `SDL_config.h`. SDL3 uses a
+different set of options, so do not copy these names to an SDL3 build.
+
 ## Build on Linux
 
 Use an x86_64 Linux host, GCC or Clang, CMake 3.20+, Ninja, Python 3 and
