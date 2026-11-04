@@ -20,11 +20,77 @@ unset(CMAKE_POLICY_VERSION_MINIMUM)
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)
 set(SDL_STATIC ON CACHE BOOL "" FORCE)
 set(SDL_TEST OFF CACHE BOOL "" FORCE)
+
+# The Linux port draws with OpenGL 3.3 core through GLX, so SDL2 must be
+# compiled with the X11 video driver and its GLX backend. SDL2 probes both
+# with check_c_source_compiles(), whose results are ordinary CMake cache
+# entries: a tree configured once without libx11-dev/libgl1-mesa-dev keeps
+# HAVE_OPENGL_GLX=0 for ever, and the resulting static SDL2 reports
+# "SDL not configured with OpenGL/GLX support" at startup even after the
+# headers are installed. Drop those cached probes so every configure tests
+# the current host, and fail loudly below if the host still cannot provide
+# them. (Mixing in a second SDL2 -- an Ubuntu libsdl2-dev, for example --
+# would not help: the static copy is the one linked into the executable.)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  foreach(_sdl_probe HAVE_OPENGL_GLX HAVE_OPENGL HAVE_X11 X11_FOUND)
+    unset(${_sdl_probe} CACHE)
+  endforeach()
+  unset(_sdl_probe)
+  # Checked before FetchContent so a missing -dev package fails here with a
+  # readable message instead of disabling a backend inside SDL2.
+  find_package(X11 REQUIRED)
+  find_package(OpenGL REQUIRED)
+  include(CheckIncludeFile)
+  check_include_file("GL/glx.h" OPENGT4_HAVE_GLX_HEADER)
+  if(NOT OPENGT4_HAVE_GLX_HEADER)
+    message(FATAL_ERROR
+      "GL/glx.h is missing. SDL2 would be built without its GLX backend and "
+      "the game could not create an OpenGL context. Install the OpenGL "
+      "development package (Debian/Ubuntu: libgl1-mesa-dev; SteamOS/Arch: "
+      "mesa) and configure again in a clean build directory.")
+  endif()
+  unset(OPENGT4_HAVE_GLX_HEADER CACHE)
+  set(SDL_X11 ON CACHE BOOL "" FORCE)
+  set(SDL_OPENGL ON CACHE BOOL "" FORCE)
+endif()
+
 FetchContent_Declare(SDL2
   GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
   GIT_TAG release-2.30.9
   GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(SDL2)
+
+# Verify what SDL2 actually produced rather than trusting the options above:
+# SDL_OPENGL/SDL_X11 can still be downgraded by a missing dependency, and a
+# silently GLX-less binary only fails at runtime on the user's machine.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set(_sdl_config "")
+  foreach(_sdl_dir "${sdl2_BINARY_DIR}" "${SDL2_BINARY_DIR}" "${CMAKE_BINARY_DIR}/_deps/sdl2-build")
+    if(_sdl_dir AND EXISTS "${_sdl_dir}/SDL_config.h.intermediate")
+      set(_sdl_config "${_sdl_dir}/SDL_config.h.intermediate")
+    endif()
+  endforeach()
+  if(NOT _sdl_config)
+    message(FATAL_ERROR "SDL2 was configured but SDL_config.h was not generated; cannot verify X11/GLX support.")
+  endif()
+  file(READ "${_sdl_config}" _sdl_config_contents)
+  set(_sdl_missing "")
+  if(NOT _sdl_config_contents MATCHES "#define SDL_VIDEO_DRIVER_X11 1")
+    list(APPEND _sdl_missing "the X11 video driver (install X11 development headers: libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev)")
+  endif()
+  if(NOT _sdl_config_contents MATCHES "#define SDL_VIDEO_OPENGL_GLX 1")
+    list(APPEND _sdl_missing "the OpenGL/GLX backend (install libgl1-mesa-dev, then delete the build directory and configure again)")
+  endif()
+  if(_sdl_missing)
+    string(REPLACE ";" "; " _sdl_missing_text "${_sdl_missing}")
+    message(FATAL_ERROR
+      "The SDL2 in ${_sdl_config} was built without ${_sdl_missing_text}.\n"
+      "A binary built this way fails at startup with \"SDL not configured with "
+      "OpenGL/GLX support\". Install the packages, remove ${CMAKE_BINARY_DIR} "
+      "completely (SDL2 caches its dependency probes) and configure again.")
+  endif()
+  message(STATUS "SDL2: X11 video driver and OpenGL/GLX backend enabled")
+endif()
 
 # ---- Native port ----
 # Platform-independent game code: data formats, UI, game systems.
@@ -178,11 +244,14 @@ target_include_directories(opengt4_platform_sdl PUBLIC include src/platform/sdl 
 target_link_libraries(opengt4_platform_sdl PUBLIC SDL2::SDL2-static opengt4_physics)
 if(WIN32)
   target_link_libraries(opengt4_platform_sdl PUBLIC opengl32)   # GL 1.1 entry points
-else()
-  find_package(OpenGL REQUIRED)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  # OpenGL::GL and the X11/GLX headers were resolved above, before SDL2.
   target_link_libraries(opengt4_platform_sdl PUBLIC OpenGL::GL)
   target_link_libraries(opengt4_core PUBLIC m)
   target_link_libraries(opengt4_physics PUBLIC m)
+else()
+  find_package(OpenGL REQUIRED)
+  target_link_libraries(opengt4_platform_sdl PUBLIC OpenGL::GL)
 endif()
 find_program(OPENGT4_FFMPEG NAMES ffmpeg DOC "FFmpeg executable for menu MPEG-2 playback (not a launcher shim)")
 # a release looks for FFmpeg beside the exe and on PATH only, never at a

@@ -1,7 +1,7 @@
 name: Experimental Linux build
 on:
   push:
-    branches: [main, steam-deck-linux]
+    branches: [main, steam-deck-linux, fix/steam-deck-glx]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -15,18 +15,63 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build pkg-config libgl1-mesa-dev \
-            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
-            libxfixes-dev libasound2-dev libpulse-dev libudev-dev ffmpeg
-      - name: Configure
-        run: cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release
-      - name: Build game and selected tests
-        run: cmake --build build-linux --target opengt4 launcher_tests media_tests sound_tests movie_posix_tests --parallel 2
+            libgl1-mesa-dri libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
+            libxi-dev libxfixes-dev libasound2-dev libpulse-dev libudev-dev \
+            ffmpeg xvfb mesa-utils nasm
+      - name: Clean configure and build
+        # tools/build_linux.sh deletes build-linux first: SDL2 caches its
+        # X11/GLX probes, so a reused tree can silently keep GLX disabled.
+        run: JOBS=2 tools/build_linux.sh
+      - name: Report the compiled SDL2 video backends
+        run: |
+          config=build-linux/_deps/sdl2-build/SDL_config.h.intermediate
+          grep -E '^#define SDL_VIDEO_(DRIVER_X11|OPENGL_GLX) 1' "$config"
+          if readelf -d build-linux/opengt4 | grep -q 'libSDL2'; then
+            echo 'opengt4 must link SDL2 statically' >&2
+            exit 1
+          fi
+      - name: Create a real X11/GLX window without a disc
+        # The startup failure this job guards against happens before any disc
+        # is opened, so it is reproducible with Xvfb and Mesa's software GL.
+        run: |
+          xvfb-run -a -s "-screen 0 1280x800x24" \
+            env SDL_VIDEODRIVER=x11 ./build-linux/opengt4 --video-check
       - name: Validate without game data
-        run: ctest --test-dir build-linux --output-on-failure -R '^(launcher_config|launcher_config_negative|native_media|native_sound|menu_music_prefix_negative|movie_posix|appimage_launcher)$'
+        run: |
+          ctest --test-dir build-linux --output-on-failure \
+            -R '^(launcher_config|launcher_config_negative|native_media|native_sound|menu_music_prefix_negative|movie_posix|appimage_launcher)$'
       - name: Check packaging scripts
         run: |
           sh -n packaging/linux/AppRun
           bash -n tools/package_appimage.sh
+          bash -n tools/build_ffmpeg_minimal.sh
+          bash -n tools/build_linux.sh
+      - name: Build the minimal FFmpeg for the image
+        # The distribution ffmpeg links libavdevice -> libSDL2/X11, which would
+        # drag a system graphics stack into the AppImage.
+        run: JOBS=2 tools/build_ffmpeg_minimal.sh build-ffmpeg
+      - name: Fetch linuxdeploy
+        run: |
+          curl -fL -o /tmp/linuxdeploy-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          printf '%s\n' 'df908b19f1ed1cdafa79508d415aa12d6c56ce4d56d4149aa8c09286718706e5  /tmp/linuxdeploy-x86_64.AppImage' | sha256sum -c -
+          chmod +x /tmp/linuxdeploy-x86_64.AppImage
+      - name: Build and self-test the AppImage
+        # xvfb-run gives the packaging script a display, so the finished image
+        # creates a real X11/GLX window before it is uploaded.
+        run: |
+          xvfb-run -a -s "-screen 0 1280x800x24" \
+            tools/package_appimage.sh build-linux /tmp/linuxdeploy-x86_64.AppImage build-ffmpeg/bin/ffmpeg
+          ls -l dist/
+      - name: Upload the AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenGT4-Steam-Deck-x86_64-AppImage
+          path: |
+            dist/*.AppImage
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14
       - name: Preserve test results
         if: always()
         uses: actions/upload-artifact@v4

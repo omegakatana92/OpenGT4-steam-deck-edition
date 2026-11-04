@@ -3,6 +3,12 @@ set -eu
 appdir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 state=${XDG_CONFIG_HOME:-"$HOME/.config"}/opengt4-steam-deck
 mkdir -p "$state"
+export OPENGT4_FFMPEG_BINARY="$appdir/usr/bin/ffmpeg"
+# Diagnostics must work before any disc is selected: report the SDL video
+# driver and create a real OpenGL window, then exit.
+if [ "${1:-}" = --video-check ]; then
+    exec "$appdir/usr/bin/opengt4" "$@"
+fi
 # Arguments are passed as separate words throughout, never evaluated as shell code.
 if [ "${1:-}" = --choose-disc ]; then
     shift
@@ -39,6 +45,7 @@ esac
 printf '%s\n' "$disc" > "$state/disc-path.tmp.$$"
 mv -- "$state/disc-path.tmp.$$" "$state/disc-path"
 printf '%s\n' 'OpenGT4 Steam Deck Edition (experimental) — Based on OpenGT4' >&2
-export LD_LIBRARY_PATH="$appdir/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export OPENGT4_FFMPEG_BINARY="$appdir/usr/bin/ffmpeg"
+# No libraries are bundled: libOpenGL, X11/Wayland and the GPU driver must come
+# from SteamOS. Setting LD_LIBRARY_PATH here used to make AppImage copies
+# shadow the system graphics stack.
 exec "$appdir/usr/bin/opengt4" "$disc" --fullscreen "$@"

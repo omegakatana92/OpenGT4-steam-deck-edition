@@ -49,6 +49,13 @@ typedef struct {
 } plat_video_desc;
 
 int  plat_video_init(const plat_video_desc *desc);
+/* Human-readable cause of the last plat_video_init() failure: the SDL error
+   for the step that failed, prefixed with that step. Never NULL. */
+const char *plat_video_error(void);
+/* Writes the SDL version, the video drivers compiled into this binary, the
+   driver in use, whether the OpenGL/GLX backend was compiled in, and the GL
+   renderer to stderr. Safe before and after plat_video_init(). */
+void plat_video_report(void);
 void plat_video_begin_frame(void);
 void plat_video_end_frame(void);
 void plat_video_shutdown(void);

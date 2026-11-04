@@ -61,5 +61,8 @@ captures/
 
 # Linux and AppImage output
 build-linux/
+build-ffmpeg/
+build-ffmpeg-cache/
 AppDir/
 *.AppImage
+*.AppImage.sha256
